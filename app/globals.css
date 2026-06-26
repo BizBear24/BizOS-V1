@@ -1,0 +1,54 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --background: #080808;
+  --panel: #141414;
+  --panel-soft: rgba(255, 255, 255, 0.045);
+  --line: rgba(255, 255, 255, 0.08);
+  --red: #ff2d2d;
+  --red-dark: #b30000;
+  --text: #f8fafc;
+  --muted: #9ca3af;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: linear-gradient(180deg, #080808 0%, #0d0d0d 100%);
+  color: var(--text);
+  font-family: Inter, system-ui, sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.glass {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px);
+}
+
+.card {
+  border: 1px solid var(--line);
+  background: rgba(20, 20, 20, 0.86);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+}
+
+.chart text {
+  fill: #a8a8a8;
+}
