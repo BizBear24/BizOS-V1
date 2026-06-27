@@ -10,6 +10,7 @@ import {
   BriefcaseBusiness,
   CheckCircle2,
   ChevronRight,
+  FileUp,
   Download,
   FileSpreadsheet,
   LineChart as LineIcon,
@@ -20,6 +21,7 @@ import {
   Users,
   Zap,
   MessageSquareMore,
+  Target,
   type LucideIcon,
 } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -62,6 +64,8 @@ const NAV = [
   { id: "Analysis", icon: BarChart3 },
   { id: "Alerts", icon: AlertTriangle },
   { id: "Intelligence", icon: ShieldAlert },
+  { id: "Scenario Lab", icon: Target },
+  { id: "Merchant Profile", icon: BadgeIndianRupee },
   { id: "Customer Intelligence", icon: MessageSquareMore },
   { id: "Consultant", icon: Brain },
 ] as const;
@@ -73,6 +77,7 @@ const colors = ["#ff2d2d", "#f97316", "#22c55e", "#38bdf8", "#a78bfa"];
 type NavId = (typeof NAV)[number]["id"];
 type AnalysisTab = (typeof ANALYSIS_TABS)[number];
 type ConsultantScope = (typeof CONSULTANT_SCOPES)[number];
+type ScenarioChoice = "Increase Prices" | "Launch Discounts" | "Hire Staff" | "Start Delivery" | "Loyalty Program" | "Open New Branch";
 type CustomerIntelTone = "positive" | "neutral" | "negative";
 type EntryType = "sale" | "payment" | "feedback";
 type PaymentMethod = "UPI" | "Cash" | "Card";
@@ -673,6 +678,26 @@ function formatUploadDate(value: string) {
   return value ? new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value)) : "No file yet";
 }
 
+function parseCsvPayments(text: string) {
+  const lines = text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map((value) => value.trim().toLowerCase());
+  return lines.slice(1).map((line) => {
+    const cells = line.split(",").map((value) => value.trim());
+    const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+    return {
+      date: String(row.date || row["payment date"] || ""),
+      amount: Number(String(row.amount || row.value || "0").replace(/[^0-9.-]/g, "")) || 0,
+      paymentMethod: String(row["payment method"] || row.method || ""),
+      time: String(row.time || row.hour || ""),
+    };
+  });
+}
+
 function buildCustomerIntelPayload(view: ViewModel, rawText: string) {
   return {
     context: "Customer intelligence text input",
@@ -691,6 +716,17 @@ function buildCustomerIntelPayload(view: ViewModel, rawText: string) {
 export default function Home() {
   const [active, setActive] = useState<NavId>("Overview");
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>("Payments");
+  const [scenarioChoice, setScenarioChoice] = useState<ScenarioChoice>("Loyalty Program");
+  const [scenarioResult, setScenarioResult] = useState<{
+    title: string;
+    summary: string;
+    confidence: number;
+    signals: string[];
+    warnings: string[];
+    recommendation: string;
+    metrics?: Record<string, string | number>;
+  } | null>(null);
+  const [scenarioLoading, setScenarioLoading] = useState(false);
   const [consultantScope, setConsultantScope] = useState<ConsultantScope>("Overall");
   const [workspace, setWorkspace] = useState<Workspace>(() => emptyWorkspace());
   const [notice, setNotice] = useState("Upload an Excel file to begin.");
@@ -705,6 +741,25 @@ export default function Home() {
   const [customerIntel, setCustomerIntel] = useState<CustomerIntelRecord | null>(null);
   const [customerIntelLoading, setCustomerIntelLoading] = useState(false);
   const [customerIntelError, setCustomerIntelError] = useState("");
+  const [customerAnalysisText, setCustomerAnalysisText] = useState(
+    "Service is slow.\nPrices are high.\nDelivery takes too long.",
+  );
+  const [customerAnalysisResult, setCustomerAnalysisResult] = useState<{
+    title: string;
+    summary: string;
+    confidence: number;
+    signals: string[];
+    warnings: string[];
+    recommendation: string;
+    rows?: Array<{ label: string; value: string; note?: string }>;
+  } | null>(null);
+  const [paymentCsvRows, setPaymentCsvRows] = useState<
+    Array<{ date: string; amount: number; paymentMethod: string; time: string }>
+  >([
+    { date: "2026-06-26", amount: 1200, paymentMethod: "UPI", time: "09:30" },
+    { date: "2026-06-26", amount: 650, paymentMethod: "Cash", time: "13:10" },
+    { date: "2026-06-27", amount: 1800, paymentMethod: "Card", time: "20:15" },
+  ]);
   const [hydrated, setHydrated] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -824,6 +879,43 @@ export default function Home() {
     }
   };
 
+  const generateCustomerAnalysis = async () => {
+    if (customerAnalysisText.trim().length === 0) return;
+    try {
+      const response = await fetch("/api/customer-intelligence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task: "customer", rawText: customerAnalysisText }),
+      });
+      const result = await response.json();
+      setCustomerAnalysisResult(result);
+      setNotice("Customer feedback analysis refreshed.");
+    } catch {
+      setNotice("Customer feedback analysis failed.");
+    }
+  };
+
+  const generateScenario = async () => {
+    setScenarioLoading(true);
+    try {
+      const response = await fetch("/api/customer-intelligence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: "scenario",
+          business: scenarioChoice,
+          context: "Business growth planning with fast payment flows and business intelligence.",
+        }),
+      });
+      const result = await response.json();
+      setScenarioResult(result);
+      setNotice("Scenario Lab updated.");
+      setActive("Scenario Lab");
+    } finally {
+      setScenarioLoading(false);
+    }
+  };
+
   return (
     <main className="min-h-screen overflow-x-hidden p-3 text-white md:p-5">
       <div className="mx-auto grid max-w-[1480px] gap-4 lg:grid-cols-[245px_1fr]">
@@ -869,26 +961,8 @@ export default function Home() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-300">
-                {workspace.fileName ? saveFileName(workspace.fileName) : "Demo workspace"}
+                {workspace.fileName ? saveFileName(workspace.fileName) : "No file loaded"}
               </span>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-2 rounded-lg bg-[#ff2d2d] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#ff4444]"
-              >
-                <Upload size={16} />
-                Upload XLSX
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void handleFiles(file);
-                  event.currentTarget.value = "";
-                }}
-              />
             </div>
           </header>
 
@@ -901,9 +975,32 @@ export default function Home() {
               transition={{ duration: 0.22 }}
             >
               {active === "Overview" && <Overview view={view} workspace={workspace} notice={notice} />}
-              {active === "Analysis" && <Analysis view={view} analysisTab={analysisTab} setAnalysisTab={setAnalysisTab} />}
+              {active === "Analysis" && (
+                <Analysis
+                  view={view}
+                  analysisTab={analysisTab}
+                  setAnalysisTab={setAnalysisTab}
+                  onUpload={() => fileInputRef.current?.click()}
+                  paymentCsvRows={paymentCsvRows}
+                  setPaymentCsvRows={setPaymentCsvRows}
+                  customerAnalysisText={customerAnalysisText}
+                  setCustomerAnalysisText={setCustomerAnalysisText}
+                  customerAnalysisResult={customerAnalysisResult}
+                  onRunCustomerAnalysis={generateCustomerAnalysis}
+                />
+              )}
               {active === "Alerts" && <Alerts view={view} />}
               {active === "Intelligence" && <Intelligence view={view} />}
+              {active === "Scenario Lab" && (
+                <ScenarioLab
+                  choice={scenarioChoice}
+                  setChoice={setScenarioChoice}
+                  result={scenarioResult}
+                  loading={scenarioLoading}
+                  onGenerate={generateScenario}
+                />
+              )}
+              {active === "Merchant Profile" && <MerchantProfile view={view} />}
               {active === "Customer Intelligence" && (
                 <CustomerIntelligence
                   view={view}
@@ -926,11 +1023,23 @@ export default function Home() {
                   setConsultantContext={setConsultantContext}
                   onGenerate={generateAnalysis}
                   onTemplateDownload={downloadTemplate}
+                  onUpload={() => fileInputRef.current?.click()}
                   notice={notice}
                 />
               )}
             </motion.div>
           </AnimatePresence>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void handleFiles(file);
+              event.currentTarget.value = "";
+            }}
+          />
         </section>
       </div>
     </main>
@@ -940,6 +1049,25 @@ export default function Home() {
 function Overview({ view, workspace, notice }: { view: ViewModel; workspace: Workspace; notice: string }) {
   return (
     <div className="grid gap-4">
+      <div className="glass rounded-lg p-6">
+        <p className="mb-3 text-sm font-bold uppercase tracking-[0.2em] text-[#ff7c7c]">Executive Brief</p>
+        <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+          <div className="rounded-lg border border-[#ff2d2d]/30 bg-gradient-to-br from-[#250507] to-[#0a0505] p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-[#ffb0b0]">Business Status</p>
+            <p className="mt-2 text-4xl font-extrabold">{view.healthScore >= 80 ? "STABLE" : "WARNING"}</p>
+            <div className="mt-5 grid gap-3 text-sm text-zinc-200">
+              <SmallStat label="Primary Threat" value="Customer retention" />
+              <SmallStat label="Primary Opportunity" value="Corporate customers" />
+              <SmallStat label="Recommended Action" value="Launch loyalty program" />
+            </div>
+          </div>
+          <div className="grid gap-3">
+            <SmallStat label="Confidence" value={`${Math.min(96, Math.max(72, view.healthScore + 4))}%`} />
+            <SmallStat label="Status Signal" value={view.healthScore >= 80 ? "Low risk" : "At risk"} />
+            <SmallStat label="Latest Read" value={workspace.analyses[0]?.headline || "Awaiting analysis"} />
+          </div>
+        </div>
+      </div>
       <div className="grid gap-4 xl:grid-cols-[1.15fr_.85fr]">
         <div className="glass rounded-lg p-6">
           <p className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Health</p>
@@ -1049,13 +1177,43 @@ function Analysis({
   view,
   analysisTab,
   setAnalysisTab,
+  onUpload,
+  paymentCsvRows,
+  setPaymentCsvRows,
+  customerAnalysisText,
+  setCustomerAnalysisText,
+  customerAnalysisResult,
+  onRunCustomerAnalysis,
 }: {
   view: ViewModel;
   analysisTab: AnalysisTab;
   setAnalysisTab: Dispatch<SetStateAction<AnalysisTab>>;
+  onUpload: () => void;
+  paymentCsvRows: Array<{ date: string; amount: number; paymentMethod: string; time: string }>;
+  setPaymentCsvRows: Dispatch<SetStateAction<Array<{ date: string; amount: number; paymentMethod: string; time: string }>>>;
+  customerAnalysisText: string;
+  setCustomerAnalysisText: Dispatch<SetStateAction<string>>;
+  customerAnalysisResult: {
+    title: string;
+    summary: string;
+    confidence: number;
+    signals: string[];
+    warnings: string[];
+    recommendation: string;
+    rows?: Array<{ label: string; value: string; note?: string }>;
+  } | null;
+  onRunCustomerAnalysis: () => void;
 }) {
+  const paymentCsvRef = useRef<HTMLInputElement | null>(null);
   return (
     <div className="grid gap-4">
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+        <p className="text-sm text-zinc-300">Use the uploaded file to drive all charts and reads.</p>
+        <button onClick={onUpload} className="flex items-center gap-2 rounded-lg bg-[#ff2d2d] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#ff4444]">
+          <FileUp size={16} />
+          Upload XLSX
+        </button>
+      </div>
       <div className="flex flex-wrap gap-2">
         {ANALYSIS_TABS.map((tab) => (
           <button
@@ -1071,69 +1229,174 @@ function Analysis({
       </div>
 
       {analysisTab === "Payments" && (
-        <div className="grid gap-4 xl:grid-cols-2">
-          <ChartCard title="Payment Mix" icon={PieIcon}>
-            <PieChart>
-              <Pie data={view.paymentMix} dataKey="value" nameKey="name" outerRadius={104} innerRadius={56} paddingAngle={3}>
-                {view.paymentMix.map((_, index) => (
-                  <Cell key={index} fill={colors[index]} />
-                ))}
-              </Pie>
-              <Tooltip contentStyle={tooltipStyle} />
-            </PieChart>
-          </ChartCard>
-          <ChartCard title="Peak Hours" icon={BarChart3}>
-            <BarChart data={view.hourHeatmap}>
-              <CartesianGrid stroke="rgba(255,255,255,.08)" vertical={false} />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Bar dataKey="count" fill={red} radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ChartCard>
-          <InsightsBox title="Payment Analysis" icon={BadgeIndianRupee} items={view.insights} />
-          <InsightsBox
-            title="Payment Notes"
-            icon={AlertTriangle}
-            items={[
-              "Payment concentration can create checkout dependency.",
-              "Peak-hour staffing should match the busiest bucket.",
-              "Use the template file to keep every payment row structured.",
-            ]}
-          />
-        </div>
+        (() => {
+          const paymentRows = paymentCsvRows.length > 0 ? paymentCsvRows : [
+            { date: "2026-06-26", amount: 1200, paymentMethod: "UPI", time: "09:30" },
+            { date: "2026-06-26", amount: 650, paymentMethod: "Cash", time: "13:10" },
+            { date: "2026-06-27", amount: 1800, paymentMethod: "Card", time: "20:15" },
+          ];
+          const mix = ["UPI", "Cash", "Card"].map((name) => ({
+            name,
+            value: paymentRows.filter((row) => row.paymentMethod.toLowerCase() === name.toLowerCase()).reduce((sum, row) => sum + row.amount, 0),
+          }));
+          const hourMap = ["Morning", "Midday", "Afternoon", "Evening", "Late"].map((name) => ({ name, count: 0 }));
+          paymentRows.forEach((row) => {
+            const hour = Number(String(row.time).split(":")[0] || 0);
+            const bucket = hour < 11 ? "Morning" : hour < 14 ? "Midday" : hour < 18 ? "Afternoon" : hour < 21 ? "Evening" : "Late";
+            const hit = hourMap.find((item) => item.name === bucket);
+            if (hit) hit.count += 1;
+          });
+          const weekend = paymentRows.filter((row) => {
+            const d = new Date(row.date).getDay();
+            return d === 0 || d === 6;
+          }).reduce((sum, row) => sum + row.amount, 0);
+          const weekday = paymentRows.filter((row) => {
+            const d = new Date(row.date).getDay();
+            return d >= 1 && d <= 5;
+          }).reduce((sum, row) => sum + row.amount, 0);
+          const avg = paymentRows.length ? Math.round(paymentRows.reduce((sum, row) => sum + row.amount, 0) / paymentRows.length) : 0;
+          const insights = [
+            `${hourMap.reduce((a, b) => (b.count > a.count ? b : a), hourMap[0]).name} is the peak business window.`,
+            mix[0].value > mix[1].value + mix[2].value ? "UPI adoption is leading the mix." : "Revenue is spread across rails.",
+            weekend > weekday ? "Weekend dependence is material." : "Weekday revenue leads the file.",
+            `Average transaction value is ${currency(avg)}.`,
+          ];
+          return (
+            <div className="grid gap-4">
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3">
+                <p className="text-sm text-zinc-300">CSV upload for payments: Date, Amount, Payment Method, Time.</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => paymentCsvRef.current?.click()}
+                    className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-200 hover:bg-white/10"
+                  >
+                    Upload CSV
+                  </button>
+                  <input
+                    ref={paymentCsvRef}
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        file.text().then((text) => {
+                          const rows = parseCsvPayments(text);
+                          if (rows.length > 0) setPaymentCsvRows(rows);
+                        });
+                      }
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <ChartCard title="Payment Mix" icon={PieIcon}>
+                    <PieChart>
+                      <Pie data={mix} dataKey="value" nameKey="name" outerRadius={104} innerRadius={56} paddingAngle={3}>
+                        {mix.map((_, index) => (
+                          <Cell key={index} fill={colors[index]} />
+                        ))}
+                      </Pie>
+                      <Tooltip contentStyle={tooltipStyle} />
+                    </PieChart>
+                  </ChartCard>
+                  <ChartCard title="Peak Hours" icon={BarChart3}>
+                    <BarChart data={hourMap}>
+                      <CartesianGrid stroke="rgba(255,255,255,.08)" vertical={false} />
+                      <XAxis dataKey="name" />
+                      <YAxis />
+                      <Tooltip contentStyle={tooltipStyle} />
+                      <Bar dataKey="count" fill={red} radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ChartCard>
+                </div>
+                <div className="grid gap-4">
+                  <div className="rounded-lg border border-white/10 bg-white/5 p-5">
+                    <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Payment Intelligence</p>
+                    <div className="mt-4 grid gap-3">
+                      <SmallStat label="Average Transaction" value={currency(avg)} />
+                      <SmallStat label="Weekend Revenue" value={currency(weekend)} />
+                      <SmallStat label="Weekday Revenue" value={currency(weekday)} />
+                    </div>
+                  </div>
+                  <InsightsBox title="Payment Intelligence" icon={BadgeIndianRupee} items={insights} />
+                </div>
+              </div>
+              <InsightsBox
+                title="Payment Notes"
+                icon={AlertTriangle}
+                items={[
+                  "Payment concentration can create checkout dependency.",
+                  "Peak-hour staffing should match the busiest bucket.",
+                  "Use the payment CSV to keep every payment row structured.",
+                ]}
+              />
+            </div>
+          );
+        })()
       )}
 
       {analysisTab === "Customers" && (
-        <div className="grid gap-4 xl:grid-cols-2">
-          <ChartCard title="Sentiment" icon={Users}>
-            <BarChart data={view.sentimentSplit}>
-              <CartesianGrid stroke="rgba(255,255,255,.08)" vertical={false} />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Bar dataKey="value" fill={red} radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ChartCard>
-          <ChartCard title="Complaint Themes" icon={AlertTriangle}>
-            <BarChart data={view.categoryMix}>
-              <CartesianGrid stroke="rgba(255,255,255,.08)" vertical={false} />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Bar dataKey="value" fill={red} radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ChartCard>
-          <InsightsBox title="Customer Analysis" icon={Users} items={view.insights} />
-          <InsightsBox
-            title="Customer Notes"
-            icon={ShieldAlert}
-            items={[
-              "Negative sentiment should be reviewed before the next response.",
-              "Low feedback volume reduces confidence.",
-              "Repeated customers are usually the easiest growth win.",
-            ]}
-          />
+        <div className="grid gap-4">
+          <div className="rounded-lg border border-white/10 bg-white/5 p-5">
+            <p className="mb-3 flex items-center gap-2 text-sm font-bold uppercase text-zinc-400">
+              <MessageSquareMore size={18} className="text-[#ff2d2d]" />
+              Customer Feedback Analysis
+            </p>
+            <textarea
+              value={customerAnalysisText}
+              onChange={(event) => setCustomerAnalysisText(event.target.value)}
+              className="min-h-28 w-full rounded-lg border border-white/10 bg-black/35 p-3 text-white outline-none focus:border-[#ff2d2d]"
+              placeholder="Paste reviews here..."
+            />
+            <button onClick={onRunCustomerAnalysis} className="mt-3 rounded-lg bg-[#ff2d2d] px-4 py-3 text-sm font-semibold text-white">
+              Analyze Feedback
+            </button>
+          </div>
+          <div className="grid gap-4 xl:grid-cols-2">
+            <ChartCard title="Sentiment" icon={Users}>
+              <BarChart data={view.sentimentSplit}>
+                <CartesianGrid stroke="rgba(255,255,255,.08)" vertical={false} />
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Bar dataKey="value" fill={red} radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ChartCard>
+            <ChartCard title="Complaint Themes" icon={AlertTriangle}>
+              <BarChart data={view.categoryMix}>
+                <CartesianGrid stroke="rgba(255,255,255,.08)" vertical={false} />
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Bar dataKey="value" fill={red} radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ChartCard>
+            <InsightsBox title="Customer Analysis" icon={Users} items={customerAnalysisResult?.signals ?? view.insights} />
+            <InsightsBox
+              title="Customer Notes"
+              icon={ShieldAlert}
+              items={customerAnalysisResult?.warnings ?? [
+                "Negative sentiment should be reviewed before the next response.",
+                "Low feedback volume reduces confidence.",
+                "Repeated customers are usually the easiest growth win.",
+              ]}
+            />
+          </div>
+          {customerAnalysisResult ? (
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded-lg border border-white/10 bg-white/5 p-5">
+                <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Summary</p>
+                <p className="mt-2 text-lg text-zinc-100">{customerAnalysisResult.summary}</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/5 p-5">
+                <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Recommendation</p>
+                <p className="mt-2 text-lg text-zinc-100">{customerAnalysisResult.recommendation}</p>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -1250,6 +1513,362 @@ function Intelligence({ view }: { view: ViewModel }) {
           icon={CheckCircle2}
           items={confidence.map(([label, value]) => `${label}: ${value}`)}
         />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <InsightsBox
+          title="Business Signals"
+          icon={ArrowUpRight}
+          items={businessSignals}
+        />
+        <div className="glass rounded-lg p-5">
+          <p className="mb-4 flex items-center gap-2 text-sm font-bold uppercase text-zinc-400">
+            <Zap size={18} className="text-[#ff2d2d]" />
+            Action Priorities
+          </p>
+          <div className="grid gap-3">
+            {[
+              { level: "HIGH", impact: "Customer retention", difficulty: "Medium", rec: "Launch loyalty program and close negative feedback loops." },
+              { level: "MEDIUM", impact: "Revenue lift", difficulty: "Low", rec: "Test targeted discounts on slow days." },
+              { level: "LOW", impact: "Operational clarity", difficulty: "Low", rec: "Track a clean signal set every week." },
+            ].map((item) => (
+              <div key={item.level} className="rounded-lg border border-white/10 bg-white/5 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs uppercase tracking-[0.2em] text-[#ff9f9f]">{item.level}</span>
+                  <span className="text-xs text-zinc-500">Difficulty: {item.difficulty}</span>
+                </div>
+                <p className="mt-2 font-semibold text-zinc-100">{item.impact}</p>
+                <p className="mt-2 text-sm text-zinc-300">{item.rec}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScenarioLab({
+  choice,
+  setChoice,
+  result,
+  loading,
+  onGenerate,
+}: {
+  choice: ScenarioChoice;
+  setChoice: Dispatch<SetStateAction<ScenarioChoice>>;
+  result: {
+    title: string;
+    summary: string;
+    confidence: number;
+    signals: string[];
+    warnings: string[];
+    recommendation: string;
+    metrics?: Record<string, string | number>;
+  } | null;
+  loading: boolean;
+  onGenerate: () => void;
+}) {
+  const options: ScenarioChoice[] = ["Increase Prices", "Launch Discounts", "Hire Staff", "Start Delivery", "Loyalty Program", "Open New Branch"];
+  return (
+    <div className="grid gap-4">
+      <div className="glass rounded-lg p-6">
+        <p className="mb-4 flex items-center gap-2 text-sm font-bold uppercase text-zinc-400">
+          <Target size={18} className="text-[#ff2d2d]" />
+          Scenario Lab
+        </p>
+        <div className="grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
+          <div className="grid gap-3">
+            <div className="flex flex-wrap gap-2">
+              {options.map((option) => (
+                <button
+                  key={option}
+                  onClick={() => setChoice(option)}
+                  className={`rounded-full border px-3 py-2 text-sm transition ${choice === option ? "border-[#ff2d2d] bg-[#ff2d2d] text-white" : "border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10"}`}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+            <button onClick={onGenerate} disabled={loading} className="w-fit rounded-lg bg-[#ff2d2d] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#ff4444] disabled:opacity-60">
+              {loading ? "Running..." : "Run Scenario"}
+            </button>
+            <p className="text-sm text-zinc-400">Built for the hackathon with a Paytm-friendly payment and growth framing.</p>
+          </div>
+          <div className="grid gap-3">
+            <SmallStat label="Revenue Impact" value={String(result?.metrics?.revenue_impact ?? "Pending")} />
+            <SmallStat label="Customer Impact" value={String(result?.metrics?.customer_impact ?? "Pending")} />
+            <SmallStat label="Risk Level" value={String(result?.metrics?.risk_level ?? "Pending")} />
+            <SmallStat label="Confidence" value={result ? `${result.confidence}%` : "Pending"} />
+          </div>
+        </div>
+      </div>
+      {result ? (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <InsightsBox title="Scenario Signals" icon={Target} items={result.signals} />
+          <InsightsBox title="Scenario Warnings" icon={AlertTriangle} items={result.warnings} />
+          <div className="rounded-lg border border-white/10 bg-white/5 p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Recommendation</p>
+            <p className="mt-2 text-lg text-zinc-100">{result.recommendation}</p>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/5 p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Summary</p>
+            <p className="mt-2 text-lg text-zinc-100">{result.summary}</p>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+
+function MerchantProfile({ view }: { view: ViewModel }) {
+  const [verified, setVerified] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [report, setReport] = useState<{
+    title: string;
+    summary: string;
+    confidence: number;
+    signals: string[];
+    warnings: string[];
+    recommendation: string;
+    metrics?: Record<string, string | number>;
+  } | null>(null);
+  const [merchant, setMerchant] = useState({
+    businessName: "Metro Mart",
+    businessType: "Retail",
+    gstin: "22AAAAA0000A1Z5",
+    aadhaar: "1234 5678 9012",
+    yearsInBusiness: "4",
+  });
+  const isReady = Boolean(merchant.businessName && merchant.businessType && merchant.gstin && merchant.aadhaar && merchant.yearsInBusiness);
+  const positiveFeedback = view.latestFeedback.filter((row) => row.sentiment === "positive").length;
+  const negativeFeedback = view.latestFeedback.filter((row) => row.sentiment === "negative").length;
+  const upiShare = view.paymentMix.find((item) => item.name === "UPI")?.value || 0;
+  const paymentTotal = view.paymentMix.reduce((sum, item) => sum + item.value, 0) || 1;
+  const upiRatio = upiShare / paymentTotal;
+  const trustScore = Math.round(clamp(58 + (verified ? 12 : 0) + (connected ? 10 : 0) + Math.min(10, view.healthScore * 0.1) + Math.min(6, positiveFeedback * 2) - Math.min(8, negativeFeedback * 3), 42, 94));
+  const salesScore = Math.round(clamp(55 + Math.min(25, view.totalRevenue / 100000) + (connected ? 8 : 0), 40, 95));
+  const paymentScore = Math.round(clamp(52 + upiRatio * 30 + (connected ? 10 : 0), 35, 95));
+  const feedbackScore = Math.round(clamp(60 + positiveFeedback * 4 - negativeFeedback * 6, 30, 92));
+  const growthScore = Math.round(clamp(50 + Math.min(20, view.repeatCustomers * 4) + (verified ? 8 : 0) + (connected ? 8 : 0), 35, 90));
+  const merchantHealth = [
+    { label: "Sales Score", value: salesScore },
+    { label: "Payments Score", value: paymentScore },
+    { label: "Feedback Score", value: feedbackScore },
+    { label: "Growth Score", value: growthScore },
+  ];
+  const readinessSegments = [
+    { label: "Verification", value: verified ? 92 : 58, tone: "gold" as const, note: "Identity and business profile" },
+    { label: "Sales", value: salesScore, tone: "emerald" as const, note: "Transactions and revenue cadence" },
+    { label: "Payments", value: paymentScore, tone: "emerald" as const, note: "UPI and rail mix" },
+    { label: "Feedback", value: feedbackScore, tone: "amber" as const, note: "Customer experience quality" },
+  ];
+
+  const runMerchantReport = async () => {
+    const response = await fetch("/api/customer-intelligence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task: "scenario",
+        business: "Merchant readiness and expansion intelligence",
+        context: [
+          `Business: ${merchant.businessName}`,
+          `Type: ${merchant.businessType}`,
+          `Years: ${merchant.yearsInBusiness}`,
+          `Health score: ${view.healthScore}`,
+          `Revenue: ${view.totalRevenue}`,
+          `Positive feedback: ${positiveFeedback}`,
+          `Negative feedback: ${negativeFeedback}`,
+          `UPI share: ${Math.round(upiRatio * 100)}%`,
+          `Verified: ${verified ? "yes" : "no"}`,
+          `Connected: ${connected ? "yes" : "no"}`,
+        ].join(" | "),
+      }),
+    });
+    const result = await response.json();
+    setReport(result);
+  };
+
+  const handleVerify = () => {
+    if (!isReady) {
+      setVerified(false);
+      return;
+    }
+    setVerified(true);
+  };
+
+  return (
+    <div className="grid gap-4">
+      <div className="glass rounded-lg p-6">
+        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[#d8b15a]">Merchant Profile</p>
+        <h3 className="mt-2 text-2xl font-extrabold text-white">Merchant Trust & Growth Intelligence</h3>
+        <p className="mt-2 text-sm text-zinc-400">Financial readiness, expansion readiness, and trust signals for merchant growth.</p>
+        <p className="mt-2 text-xs uppercase tracking-[0.2em] text-[#f0dca1]">Merchant rails connected with fast UPI-led payment flow</p>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1.05fr_.95fr]">
+        <div className="rounded-lg border border-[#d8b15a]/25 bg-gradient-to-br from-[#2a2212] via-[#15110a] to-[#080705] p-6">
+          <p className="mb-4 flex items-center gap-2 text-sm font-bold uppercase text-[#f0dca1]">
+            <ShieldAlert size={18} />
+            Merchant Verification
+          </p>
+          <div className="grid gap-3">
+            {[["Business Name", "businessName"], ["Business Type", "businessType"], ["GSTIN", "gstin"], ["Aadhaar", "aadhaar"], ["Years in Business", "yearsInBusiness"]].map(([label, key]) => (
+              <label key={key} className="grid gap-2 text-sm text-zinc-300">
+                {label}
+                <input
+                  required
+                  value={(merchant as Record<string, string>)[key]}
+                  onChange={(event) => setMerchant((current) => ({ ...current, [key]: event.target.value }))}
+                  className="rounded-lg border border-white/10 bg-black/35 p-3 text-white outline-none focus:border-[#d8b15a]"
+                />
+              </label>
+            ))}
+            <button onClick={handleVerify} className="mt-2 rounded-lg border border-[#d8b15a]/35 bg-[#d8b15a]/15 px-4 py-3 text-sm font-semibold text-[#f8e8bc] hover:bg-[#d8b15a]/20">Verify Merchant</button>
+            <div className="grid gap-2 text-sm text-zinc-200">
+              {verified ? (
+                <>
+                  <p>Merchant Verified</p>
+                  <p>GST Verified</p>
+                  <p>Business Profile Verified</p>
+                </>
+              ) : (
+                <p className="text-zinc-400">All fields are required before demo verification.</p>
+              )}
+            </div>
+            <div className="rounded-lg border border-[#d8b15a]/25 bg-[#d8b15a]/10 p-4">
+              <p className="text-xs uppercase tracking-[0.22em] text-[#f0dca1]">Trust Score</p>
+              <p className="mt-1 text-4xl font-extrabold text-white">{trustScore}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4">
+          <div className="rounded-lg border border-white/10 bg-white/5 p-6">
+            <p className="mb-4 text-sm font-bold uppercase tracking-[0.2em] text-[#d8b15a]">Demo ERP / POS Integration</p>
+            <div className="grid gap-3 md:grid-cols-3">
+              {["POS System", "ERP System", "Sales Software"].map((item) => (
+                <div key={item} className="rounded-lg border border-white/10 bg-white/5 p-4">
+                  <p className="font-semibold text-zinc-100">{item}</p>
+                  <p className="mt-2 text-sm text-zinc-400">Local demo connector</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button onClick={() => setConnected(true)} className="rounded-lg bg-[#d8b15a] px-4 py-3 text-sm font-semibold text-black">Connect POS</button>
+              <button onClick={() => setConnected(true)} className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-zinc-100">Import Sales Data</button>
+            </div>
+            <p className="mt-4 text-sm text-[#f0dca1]">Connection status: {connected ? "POS and sales feeds active" : "Connect POS to see live merchant rails"}</p>
+            {connected ? <p className="mt-1 text-sm text-[#f0dca1]">2,345 transactions imported</p> : null}
+            {connected ? <p className="mt-1 text-sm text-[#f0dca1]">₹18.4L revenue analyzed</p> : null}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {merchantHealth.map((item) => (
+              <ProgressRing key={item.label} label={item.label} value={item.value} />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-4">
+        {readinessSegments.map((item) => (
+          <ScoreCard key={item.label} label={item.label} value={item.value} tone={item.tone} note={item.note} />
+        ))}
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1.1fr_.9fr]">
+        <div className="rounded-lg border border-[#d8b15a]/25 bg-[#15110a] p-6">
+          <p className="mb-4 text-sm font-bold uppercase tracking-[0.2em] text-[#f0dca1]">Credit Readiness</p>
+          <div className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]">
+            <div className="rounded-lg border border-[#d8b15a]/25 bg-[#d8b15a]/10 p-5">
+              <p className="text-xs uppercase tracking-[0.2em] text-[#f0dca1]">Financial Readiness</p>
+              <p className="mt-2 text-4xl font-extrabold text-white">78</p>
+              <p className="mt-2 text-sm text-zinc-300">Risk Level: Medium</p>
+            </div>
+            <div className="grid gap-3 text-sm text-zinc-200">
+              <SmallStat label="Strengths" value={`Stable transactions - ${Math.max(1, view.activityCount)} rows`} />
+              <SmallStat label="Strengths" value={`Strong UPI adoption - ${Math.round(upiRatio * 100)}%`} />
+              <SmallStat label="Strengths" value={`Good revenue consistency - ${currency(view.totalRevenue)}`} />
+              <SmallStat label="Risks" value={`Customer retention - ${negativeFeedback} negative notes`} />
+              <SmallStat label="Risks" value={view.summaryLines[3] || "Weekend dependency"} />
+              <SmallStat label="Recommendation" value="Improve retention before expansion" />
+            </div>
+          </div>
+        </div>
+        <div className="rounded-lg border border-white/10 bg-white/5 p-6">
+          <p className="mb-4 text-sm font-bold uppercase tracking-[0.2em] text-[#d8b15a]">Expansion Readiness</p>
+          <div className="grid gap-3">
+            <SmallStat label="Expansion Score" value={`${growthScore}`} />
+            <SmallStat label="Recommended" value="Wait 3 months before opening another branch" />
+            <SmallStat label="Growth Opportunity" value={view.categoryMix[0]?.name || "Corporate customers"} />
+            <button onClick={runMerchantReport} className="mt-2 rounded-lg bg-[#d8b15a] px-4 py-3 text-sm font-semibold text-black">Generate Merchant Report</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <BenchmarkCard label="Revenue" delta={`+${Math.max(3, Math.round(view.totalRevenue / 120000))}%`} positive />
+        <BenchmarkCard label="UPI Adoption" delta={`${Math.round(upiRatio * 100)}%`} positive />
+        <BenchmarkCard label="Customer Satisfaction" delta={`${positiveFeedback - negativeFeedback > 0 ? "+" : ""}${(positiveFeedback - negativeFeedback) * 2}%`} positive={positiveFeedback >= negativeFeedback} />
+        <BenchmarkCard label="Sales Feedback" delta={`${positiveFeedback > negativeFeedback ? "+" : ""}${positiveFeedback - negativeFeedback}`} positive={positiveFeedback >= negativeFeedback} />
+        <div className="rounded-lg border border-white/10 bg-white/5 p-5">
+          <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">AI Merchant Report</p>
+          {report ? (
+            <div className="mt-3 grid gap-3">
+              <SmallStat label="Trust Score" value={`${report.metrics?.trust_score ?? trustScore}`} />
+              <SmallStat label="Business Risks" value={report.warnings.join(", ") || "None"} />
+              <SmallStat label="Growth Opportunities" value={report.signals.slice(0, 2).join(", ") || "Expansion readiness"} />
+              <SmallStat label="Recommendations" value={report.recommendation} />
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-zinc-400">Generate a merchant report to see trust and growth intelligence.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProgressRing({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+      <div className="flex items-center gap-3">
+        <div className="grid size-16 place-items-center rounded-full border border-[#d8b15a]/30 bg-[#d8b15a]/10 text-[#f7e2a8]">
+          {value}%
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-zinc-100">{label}</p>
+          <p className="text-xs text-zinc-500">Merchant health signal</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScoreCard({ label, value, tone, note }: { label: string; value: number; tone: "gold" | "emerald" | "amber"; note: string }) {
+  const styles =
+    tone === "gold"
+      ? "border-[#d8b15a]/25 bg-[#d8b15a]/10 text-[#f8e8bc]"
+      : tone === "emerald"
+        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+        : "border-amber-500/25 bg-amber-500/10 text-amber-100";
+  return (
+    <div className={`rounded-lg border p-4 ${styles}`}>
+      <p className="text-xs uppercase tracking-[0.2em] opacity-80">{label}</p>
+      <p className="mt-2 text-3xl font-extrabold text-white">{value}</p>
+      <p className="mt-1 text-xs opacity-80">{note}</p>
+    </div>
+  );
+}
+
+function BenchmarkCard({ label, delta, positive }: { label: string; delta: string; positive: boolean }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/5 p-5">
+      <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Benchmarking</p>
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <p className="font-semibold text-zinc-100">{label}</p>
+        <span className={positive ? "text-emerald-400" : "text-rose-400"}>{delta}</span>
       </div>
     </div>
   );
@@ -1565,6 +2184,7 @@ function Consultant({
   setConsultantContext,
   onGenerate,
   onTemplateDownload,
+  onUpload,
   notice,
 }: {
   view: ViewModel;
@@ -1585,6 +2205,7 @@ function Consultant({
   >;
   onGenerate: () => void;
   onTemplateDownload: () => void;
+  onUpload: () => void;
   notice: string;
 }) {
   return (
@@ -1596,6 +2217,10 @@ function Consultant({
             File Templates
           </p>
           <div className="grid gap-3">
+            <button onClick={onUpload} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-left hover:bg-white/10">
+              <span>Upload XLSX</span>
+              <FileUp size={16} />
+            </button>
             <button onClick={onTemplateDownload} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-left hover:bg-white/10">
               <span>Download Excel template</span>
               <Download size={16} />
