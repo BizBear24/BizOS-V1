@@ -19,6 +19,7 @@ import {
   Upload,
   Users,
   Zap,
+  MessageSquareMore,
   type LucideIcon,
 } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -61,6 +62,7 @@ const NAV = [
   { id: "Analysis", icon: BarChart3 },
   { id: "Alerts", icon: AlertTriangle },
   { id: "Intelligence", icon: ShieldAlert },
+  { id: "Customer Intelligence", icon: MessageSquareMore },
   { id: "Consultant", icon: Brain },
 ] as const;
 const ANALYSIS_TABS = ["Payments", "Customers", "Growth"] as const;
@@ -71,6 +73,7 @@ const colors = ["#ff2d2d", "#f97316", "#22c55e", "#38bdf8", "#a78bfa"];
 type NavId = (typeof NAV)[number]["id"];
 type AnalysisTab = (typeof ANALYSIS_TABS)[number];
 type ConsultantScope = (typeof CONSULTANT_SCOPES)[number];
+type CustomerIntelTone = "positive" | "neutral" | "negative";
 type EntryType = "sale" | "payment" | "feedback";
 type PaymentMethod = "UPI" | "Cash" | "Card";
 type Sentiment = "positive" | "neutral" | "negative";
@@ -99,6 +102,26 @@ type AnalysisRecord = {
   actions: string[];
   sourceCount: number;
   question: string;
+};
+
+type CustomerIntelRecord = {
+  id: string;
+  createdAt: string;
+  overview: string;
+  sentiment: CustomerIntelTone;
+  churnRisk: "LOW" | "MEDIUM" | "HIGH";
+  opportunity: string;
+  recommendation: string;
+  confidence: number;
+  signals: string[];
+  warnings: string[];
+  relatedRows: number;
+  feedbackSummary: Array<{
+    customer: string;
+    sentiment: Sentiment;
+    category: string;
+    note: string;
+  }>;
 };
 
 const DEMO_ROWS: ActivityRow[] = [
@@ -208,6 +231,7 @@ type ViewModel = {
   repeatCustomers: number;
   latestRows: ActivityRow[];
   latestAnalyses: AnalysisRecord[];
+  latestFeedback: ActivityRow[];
   summaryLines: string[];
   insights: string[];
   warnings: string[];
@@ -215,7 +239,7 @@ type ViewModel = {
 };
 
 function emptyWorkspace(): Workspace {
-  return { fileName: "demo_workspace.xlsx", importedAt: "2026-06-26T00:00:00.000Z", rows: DEMO_ROWS, analyses: DEMO_ANALYSIS };
+  return { fileName: "", importedAt: "", rows: [], analyses: [] };
 }
 
 function loadWorkspace(): Workspace {
@@ -286,11 +310,27 @@ function parseDateValue(value: unknown) {
 
 function inferSentiment(note: string, explicit?: string): Sentiment {
   const normalized = cleanText(explicit).toLowerCase();
-  if (normalized === "positive" || normalized === "good") return "positive";
-  if (normalized === "negative" || normalized === "bad") return "negative";
+  if (/(^|[^a-z])(positive|pos|good|great|happy|love|liked|satisfied)([^a-z]|$)/.test(normalized)) return "positive";
+  if (/(^|[^a-z])(negative|neg|bad|poor|unhappy|disappointed|dissatisfied)([^a-z]|$)/.test(normalized)) return "negative";
+
   const lower = note.toLowerCase();
-  if (/(great|good|love|excellent|happy|fast|amazing|nice|smooth|quick)/.test(lower)) return "positive";
-  if (/(slow|late|bad|poor|expensive|issue|problem|complaint|worst|unhappy|delay|refund)/.test(lower)) return "negative";
+
+  const positiveHits = [
+    /(^|[^a-z])(great|excellent|amazing|awesome|happy|love|loved|liked|satisfied|smooth|quick|fast|helpful|perfect)([^a-z]|$)/g,
+  ].reduce((count, pattern) => count + (lower.match(pattern)?.length ?? 0), 0);
+
+  const negativeHits = [
+    /(^|[^a-z])(slow|late|bad|poor|badly|terrible|awful|hate|hated|unhappy|disappointed|dissatisfied|issue|problem|complaint|worst|delay|refund|confusing|rude)([^a-z]|$)/g,
+    /\b(not|never|no|didn't|dont|don't|cannot|can't|won't|wont|without)\b\s+(like|liked|love|loved|want|wanted|recommend|satisfied|happy|good|great|helpful|okay|ok)\b/g,
+    /\b(did not|didn't|do not|don't|wasn't|were not|not)\b.*\b(like|love|enjoy|satisfied|happy|good|great|helpful)\b/g,
+  ].reduce((count, pattern) => count + (lower.match(pattern)?.length ?? 0), 0);
+
+  if (negativeHits > positiveHits) return "negative";
+  if (positiveHits > negativeHits) return "positive";
+
+  if (/\bnot bad\b/.test(lower) || /\bokay\b/.test(lower) || /\bokay\b/.test(lower)) return "neutral";
+  if (positiveHits > 0) return "positive";
+  if (negativeHits > 0) return "negative";
   return "neutral";
 }
 
@@ -476,6 +516,7 @@ function buildView(rows: ActivityRow[], analyses: AnalysisRecord[]): ViewModel {
     repeatCustomers,
     latestRows: sortedRows.slice(0, 7),
     latestAnalyses: analyses.slice(0, 5),
+    latestFeedback: feedback.slice().sort((a, b) => +new Date(b.date) - +new Date(a.date)).slice(0, 6),
     summaryLines,
     insights: [
       paymentLeading.value > 0 ? `${paymentLeading.name} dominates payments.` : "No payment data yet.",
@@ -583,17 +624,38 @@ function formatUploadDate(value: string) {
   return value ? new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value)) : "No file yet";
 }
 
+function buildCustomerIntelPayload(view: ViewModel, rawText: string) {
+  return {
+    context: "Customer intelligence text input",
+    rawText,
+    healthScore: view.healthScore,
+    threatLevel: view.threatLevel,
+    totalRevenue: view.totalRevenue,
+    activityCount: view.activityCount,
+    sentimentSplit: view.sentimentSplit,
+    repeatCustomers: view.repeatCustomers,
+    warnings: view.warnings,
+    actions: view.actions,
+  };
+}
+
 export default function Home() {
   const [active, setActive] = useState<NavId>("Overview");
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>("Payments");
   const [consultantScope, setConsultantScope] = useState<ConsultantScope>("Overall");
   const [workspace, setWorkspace] = useState<Workspace>(() => emptyWorkspace());
-  const [notice, setNotice] = useState("Upload an Excel file or use the demo workspace to begin.");
+  const [notice, setNotice] = useState("Upload an Excel file to begin.");
   const [consultantContext, setConsultantContext] = useState({
     ownerGoal: "Increase repeat orders without adding overhead",
     recentChange: "Weekend traffic is stronger than weekdays",
     decision: "Where to focus the next operational improvement",
   });
+  const [customerIntelText, setCustomerIntelText] = useState(
+    "Customer said: I did not like the slow checkout. Support was helpful, but overall the experience felt frustrating.",
+  );
+  const [customerIntel, setCustomerIntel] = useState<CustomerIntelRecord | null>(null);
+  const [customerIntelLoading, setCustomerIntelLoading] = useState(false);
+  const [customerIntelError, setCustomerIntelError] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -665,6 +727,52 @@ export default function Home() {
     }));
     setNotice(`Saved a ${consultantScope.toLowerCase()} analysis.`);
     setActive("Consultant");
+  };
+
+  const generateCustomerIntel = async () => {
+    if (workspace.rows.length === 0) {
+      setNotice("Upload data first, then generate customer intelligence.");
+      return;
+    }
+    setCustomerIntelLoading(true);
+    setCustomerIntelError("");
+    try {
+      const response = await fetch("/api/customer-intelligence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildCustomerIntelPayload(view, customerIntelText)),
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+      const result = (await response.json()) as CustomerIntelRecord;
+      setCustomerIntel(result);
+      setWorkspace((current) => ({
+        ...current,
+        analyses: [
+          {
+            id: createId("analysis"),
+            createdAt: result.createdAt,
+            scope: "Customers",
+            score: result.sentiment === "negative" ? 42 : result.sentiment === "neutral" ? 68 : 82,
+            headline: "Customer intelligence brief",
+            summary: result.overview,
+            signals: result.signals,
+            risks: result.warnings,
+            actions: [result.recommendation],
+            sourceCount: result.relatedRows,
+            question: customerIntelText,
+          },
+          ...current.analyses,
+        ],
+      }));
+      setNotice("Customer intelligence refreshed.");
+      setActive("Customer Intelligence");
+    } catch (error) {
+      setCustomerIntelError(error instanceof Error ? error.message : "Unable to generate customer intelligence.");
+    } finally {
+      setCustomerIntelLoading(false);
+    }
   };
 
   return (
@@ -747,6 +855,18 @@ export default function Home() {
               {active === "Analysis" && <Analysis view={view} analysisTab={analysisTab} setAnalysisTab={setAnalysisTab} />}
               {active === "Alerts" && <Alerts view={view} />}
               {active === "Intelligence" && <Intelligence view={view} />}
+              {active === "Customer Intelligence" && (
+                <CustomerIntelligence
+                  view={view}
+                  workspace={workspace}
+                  note={customerIntelText}
+                  setNote={setCustomerIntelText}
+                  result={customerIntel}
+                  loading={customerIntelLoading}
+                  error={customerIntelError}
+                  onGenerate={generateCustomerIntel}
+                />
+              )}
               {active === "Consultant" && (
                 <Consultant
                   view={view}
@@ -1081,6 +1201,129 @@ function Intelligence({ view }: { view: ViewModel }) {
           icon={CheckCircle2}
           items={confidence.map(([label, value]) => `${label}: ${value}`)}
         />
+      </div>
+    </div>
+  );
+}
+
+function CustomerIntelligence({
+  view,
+  workspace,
+  note,
+  setNote,
+  result,
+  loading,
+  error,
+  onGenerate,
+}: {
+  view: ViewModel;
+  workspace: Workspace;
+  note: string;
+  setNote: Dispatch<SetStateAction<string>>;
+  result: CustomerIntelRecord | null;
+  loading: boolean;
+  error: string;
+  onGenerate: () => void;
+}) {
+  const latest = result?.feedbackSummary ?? [];
+
+  return (
+    <div className="grid gap-4">
+      <div className="glass rounded-lg p-6">
+        <p className="mb-4 flex items-center gap-2 text-sm font-bold uppercase text-zinc-400">
+          <MessageSquareMore size={18} className="text-[#ff2d2d]" />
+          Customer Intelligence
+        </p>
+        <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+          <div className="grid gap-3 rounded-lg border border-white/10 bg-white/5 p-5">
+            <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Raw Text</p>
+            <textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              className="min-h-28 rounded-lg border border-white/10 bg-black/35 p-3 text-white outline-none focus:border-[#ff2d2d]"
+              placeholder="Paste a WhatsApp export, review text, notes, or PDF text here."
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={onGenerate}
+                disabled={loading || note.trim().length === 0}
+                className="flex items-center gap-2 rounded-lg bg-[#ff2d2d] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#ff4444] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Sparkles size={16} />
+                {loading ? "Analyzing..." : "Run Customer Intelligence"}
+              </button>
+              <span className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-sm text-zinc-300">
+                Text length: {note.trim().length}
+              </span>
+            </div>
+            <p className="text-sm text-zinc-400">
+              This tab reads raw pasted text and turns it into sentiment, churn risk, opportunity, and action guidance.
+            </p>
+            {error ? <p className="rounded-lg border border-[#ff2d2d]/25 bg-[#ff2d2d]/10 p-3 text-sm text-[#ffb3b3]">{error}</p> : null}
+          </div>
+
+          <div className="grid gap-3">
+            <SmallStat label="Customer Sentiment" value={result ? result.sentiment.toUpperCase() : "PENDING"} />
+            <SmallStat label="Churn Risk" value={result ? result.churnRisk : "PENDING"} />
+            <SmallStat label="Opportunity" value={result?.opportunity || "Pending analysis"} />
+            <SmallStat label="Confidence" value={result ? `${result.confidence}%` : "PENDING"} />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <InsightsBox
+          title="Executive Read"
+          icon={Brain}
+          items={[
+            result?.overview || "The customer base looks usable, but the best signal comes from the written feedback and not just the counts.",
+            `Primary recommendation: ${result?.recommendation || "Turn repeat customers into a loyalty loop."}`,
+            `Active context: ${note}`,
+          ]}
+        />
+        <InsightsBox
+          title="Risk and Opportunity"
+          icon={ShieldAlert}
+          items={[
+            `Churn risk: ${result?.churnRisk || "PENDING"}`,
+            `Warnings: ${(result?.warnings.length || view.warnings.length) > 0 ? "Present" : "None"}`,
+            `Opportunity: ${result?.opportunity || "Subscription or loyalty expansion"}`,
+          ]}
+        />
+        <InsightsBox
+          title="Feedback Signals"
+          icon={Users}
+          items={
+            latest.length > 0
+              ? latest.map((item) => `${item.customer}: ${item.sentiment} | ${item.category} | ${item.note}`)
+              : ["Paste raw customer text to see extracted snippets here."]
+          }
+        />
+        <InsightsBox
+          title="Action Notes"
+          icon={Zap}
+          items={
+            result?.signals?.length
+              ? result.signals
+              : [
+                  "Paste the raw text directly into this box.",
+                  "Use sentiment to track retention pressure over time.",
+                  "Connect negative notes to the Alerts tab for fast review.",
+                ]
+          }
+        />
+      </div>
+      <div className="glass rounded-lg p-6">
+        <p className="mb-4 flex items-center gap-2 text-sm font-bold uppercase text-zinc-400">
+          <BriefcaseBusiness size={18} className="text-[#ff2d2d]" />
+          Analytics Export
+        </p>
+        <p className="text-sm text-zinc-300">
+          Every run is written into the analysis trail, so customer sentiment shows up alongside the rest of the business intelligence.
+        </p>
+        <p className="mt-3 text-sm text-zinc-500">
+          Latest saved analyses: {workspace.analyses.length}
+        </p>
       </div>
     </div>
   );
