@@ -235,6 +235,12 @@ type ViewModel = {
   summaryLines: string[];
   insights: string[];
   warnings: string[];
+  alertItems: Array<{
+    title: string;
+    severity: "HIGH" | "MEDIUM" | "LOW";
+    detail: string;
+    source: string;
+  }>;
   actions: string[];
 };
 
@@ -477,6 +483,39 @@ function buildView(rows: ActivityRow[], analyses: AnalysisRecord[]): ViewModel {
     .reduce((sum, row) => sum + row.amount, 0);
 
   const paymentLeading = paymentMix.reduce((prev, curr) => (curr.value > prev.value ? curr : prev), paymentMix[0]);
+  const negativeFeedback = feedback
+    .filter((row) => row.sentiment === "negative")
+    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
+  const consultantAlerts = analyses.flatMap((analysis) =>
+    analysis.risks.slice(0, 3).map((risk) => ({
+      title: analysis.headline,
+      severity: /churn|negative|risk|retention|critical/i.test(risk) ? ("HIGH" as const) : ("MEDIUM" as const),
+      detail: risk,
+      source: `AI consultant · ${shortDate(analysis.createdAt)}`,
+    })),
+  );
+  const businessAlerts = [
+    ...(paymentLeading.value > revenue * 0.65
+      ? [
+          {
+            title: "Payment concentration",
+            severity: "MEDIUM" as const,
+            detail: `${paymentLeading.name} dominates the payment mix.`,
+            source: "Business analysis",
+          },
+        ]
+      : []),
+    ...(rows.length < 12
+      ? [
+          {
+            title: "Thin signal base",
+            severity: "LOW" as const,
+            detail: "Trend confidence is lower because the dataset is still small.",
+            source: "Business analysis",
+          },
+        ]
+      : []),
+  ];
   const categoryMix = Object.entries(
     rows.reduce<Record<string, number>>((acc, row) => {
       const key = row.category || "Uncategorized";
@@ -524,10 +563,20 @@ function buildView(rows: ActivityRow[], analyses: AnalysisRecord[]): ViewModel {
       repeatCustomers > 0 ? `${repeatCustomers} customers appear more than once.` : "No repeated customers are visible yet.",
     ],
     warnings: [
-      negative > 0 ? "Customer friction exists in the current file." : "No negative sentiment is present yet.",
+      negative > 0 ? `${negative} negative feedback entries are present.` : "No negative sentiment is present yet.",
       paymentLeading.value > revenue * 0.65 ? "Payment concentration is high." : "Payment mix is reasonably spread.",
       rows.length < 12 ? "Upload more rows for stronger trend confidence." : "Trend coverage is adequate.",
       negative > 1 ? "Churn pressure is rising from repeated negative feedback." : "No churn cluster is visible yet.",
+    ],
+    alertItems: [
+      ...negativeFeedback.slice(0, 4).map((row) => ({
+        title: row.category || "Negative feedback",
+        severity: "HIGH" as const,
+        detail: row.note,
+        source: `Customer feedback · ${row.customer} · ${shortDate(row.date)}`,
+      })),
+      ...consultantAlerts,
+      ...businessAlerts,
     ],
     actions: [
       "Review the latest feedback notes before the next shift.",
@@ -1330,37 +1379,141 @@ function CustomerIntelligence({
 }
 
 function Alerts({ view }: { view: ViewModel }) {
+  const severityRank = { HIGH: 0, MEDIUM: 1, LOW: 2 } as const;
+  const sortedAlerts = [...view.alertItems].sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
+  const highCount = view.alertItems.filter((item) => item.severity === "HIGH").length;
+  const mediumCount = view.alertItems.filter((item) => item.severity === "MEDIUM").length;
+  const lowCount = view.alertItems.filter((item) => item.severity === "LOW").length;
   const alertGroups = [
     {
       title: "Churn Signals",
-      items: view.warnings.filter((item) => /churn|negative|retention|repeat/.test(item.toLowerCase())),
+      items: sortedAlerts.filter((item) => /churn|negative|retention|repeat|feedback/.test(item.title.toLowerCase()) || item.severity === "HIGH"),
     },
     {
       title: "Revenue Signals",
-      items: view.warnings.filter((item) => /revenue|payment|volume|stability/.test(item.toLowerCase())),
+      items: sortedAlerts.filter((item) => /revenue|payment|volume|stability/.test(item.title.toLowerCase()) || item.severity === "MEDIUM"),
     },
     {
       title: "Operational Signals",
-      items: view.warnings.filter((item) => /delivery|service|feedback|confidence|trend|forecast/.test(item.toLowerCase())),
+      items: sortedAlerts.filter((item) => /delivery|service|feedback|confidence|trend|forecast|delay|support/.test(item.title.toLowerCase()) || item.severity === "LOW"),
     },
   ];
 
   return (
     <div className="grid gap-4">
       <div className="glass rounded-lg p-6">
-        <p className="mb-4 flex items-center gap-2 text-sm font-bold uppercase text-zinc-400">
-          <AlertTriangle size={18} className="text-[#ff2d2d]" />
-          Negative Signals
-        </p>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="flex items-center gap-2 text-sm font-bold uppercase text-zinc-400">
+              <AlertTriangle size={18} className="text-[#ff2d2d]" />
+              Threat Monitor
+            </p>
+            <p className="mt-2 text-sm text-zinc-400">Imported negative feedback, consultant risks, and business alerts are surfaced here first.</p>
+          </div>
+          <div className="rounded-full border border-[#ff2d2d]/25 bg-[#ff2d2d]/10 px-3 py-1 text-xs uppercase tracking-[0.22em] text-[#ffb3b3]">
+            Active alerts only
+          </div>
+        </div>
+
+        <div className="mb-4 grid gap-3 xl:grid-cols-[1.2fr_.8fr]">
+          <div className="rounded-lg border border-[#ff2d2d]/30 bg-gradient-to-br from-[#2a070a] via-[#160507] to-[#090303] p-4 shadow-[0_0_0_1px_rgba(255,45,45,.10),0_20px_50px_rgba(0,0,0,.25)]">
+            <div className="flex items-center gap-2 text-[#ff8d8d]">
+              <ShieldAlert size={18} />
+              <p className="text-xs uppercase tracking-[0.22em]">Threat posture</p>
+            </div>
+            <p className="mt-2 text-lg font-semibold text-white">Escalate negative feedback before it compounds.</p>
+            <p className="mt-2 text-sm text-zinc-300">Every card below is pulled from real imported feedback or analysis signals, then ranked by severity.</p>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <SeverityStat label="High" value={`${highCount}`} tone="high" />
+            <SeverityStat label="Medium" value={`${mediumCount}`} tone="medium" />
+            <SeverityStat label="Low" value={`${lowCount}`} tone="low" />
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+          <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Top alerts</p>
+          <div className="mt-3 grid gap-2">
+            {sortedAlerts.slice(0, 5).map((item) => (
+              <div
+                key={`top-${item.title}-${item.source}`}
+                className={`rounded-md border px-3 py-3 text-sm ${
+                  item.severity === "HIGH"
+                    ? "border-[#ff2d2d]/35 bg-[#ff2d2d]/12 text-[#ffd8d8]"
+                    : item.severity === "MEDIUM"
+                      ? "border-[#f97316]/35 bg-[#f97316]/10 text-[#ffe8d1]"
+                      : "border-white/15 bg-[#17303a]/45 text-zinc-200"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`grid size-8 place-items-center rounded-lg ${
+                        item.severity === "HIGH"
+                          ? "bg-[#ff2d2d]/20 text-[#ff9b9b]"
+                          : item.severity === "MEDIUM"
+                            ? "bg-[#f97316]/20 text-[#ffcf9c]"
+                            : "bg-white/10 text-[#8dd6ff]"
+                      }`}
+                    >
+                      <AlertTriangle size={15} />
+                    </span>
+                    <div>
+                      <p className="font-semibold">{item.title}</p>
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{item.source}</p>
+                    </div>
+                  </div>
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-[11px] uppercase tracking-[0.2em] ${
+                      item.severity === "HIGH"
+                        ? "bg-[#ff2d2d]/20 text-[#ff9d9d]"
+                        : item.severity === "MEDIUM"
+                          ? "bg-[#f97316]/20 text-[#ffd0a7]"
+                          : "bg-white/10 text-zinc-300"
+                    }`}
+                  >
+                    {item.severity}
+                  </span>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-zinc-300">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </div>
         <div className="grid gap-3 md:grid-cols-3">
           {alertGroups.map((group) => (
-            <div key={group.title} className="rounded-lg border border-white/10 bg-white/5 p-4">
-              <p className="text-sm font-semibold text-zinc-200">{group.title}</p>
+            <div
+              key={group.title}
+              className="rounded-lg border border-white/10 bg-gradient-to-b from-white/[0.07] to-white/[0.03] p-4"
+            >
+              <div className="flex items-center gap-2">
+                <span className="grid size-8 place-items-center rounded-lg bg-[#ff2d2d]/15 text-[#ff8d8d]">
+                  <AlertTriangle size={15} />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-zinc-100">{group.title}</p>
+                  <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Escalation queue</p>
+                </div>
+              </div>
               <div className="mt-3 grid gap-2">
                 {group.items.length > 0 ? (
                   group.items.map((item) => (
-                    <div key={item} className="rounded-md border border-[#ff2d2d]/25 bg-[#ff2d2d]/10 px-3 py-2 text-sm text-[#ffb3b3]">
-                      {item}
+                    <div
+                      key={`${item.title}-${item.source}`}
+                      className={`rounded-md border px-3 py-2 text-sm ${
+                        item.severity === "HIGH"
+                          ? "border-[#ff2d2d]/35 bg-[#ff2d2d]/15 text-[#ffd1d1]"
+                          : item.severity === "MEDIUM"
+                            ? "border-[#f97316]/35 bg-[#f97316]/12 text-[#ffe2c7]"
+                            : "border-white/15 bg-white/5 text-zinc-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-semibold">{item.title}</span>
+                        <span className="text-[11px] uppercase tracking-[0.2em] opacity-80">{item.severity}</span>
+                      </div>
+                      <p className="mt-2 text-xs leading-5 opacity-90">{item.detail}</p>
+                      <p className="mt-2 text-[11px] uppercase tracking-[0.16em] text-zinc-500">{item.source}</p>
                     </div>
                   ))
                 ) : (
@@ -1378,11 +1531,27 @@ function Alerts({ view }: { view: ViewModel }) {
         title="Alert Feed"
         icon={ShieldAlert}
         items={
-          view.warnings.length > 0
-            ? view.warnings
+          view.alertItems.length > 0
+            ? view.alertItems.slice(0, 6).map((item) => `${item.severity}: ${item.title} — ${item.detail}`)
             : ["No negative signals are currently active.", "This tab will light up when churn or feedback pressure appears."]
         }
       />
+    </div>
+  );
+}
+
+function SeverityStat({ label, value, tone }: { label: string; value: string; tone: "high" | "medium" | "low" }) {
+  const styles =
+    tone === "high"
+      ? "border-[#ff2d2d]/30 bg-[#ff2d2d]/12 text-[#ffd1d1]"
+      : tone === "medium"
+        ? "border-[#f97316]/30 bg-[#f97316]/12 text-[#ffe0bf]"
+        : "border-white/10 bg-[#0f2430] text-[#cdefff]";
+  return (
+    <div className={`rounded-lg border p-4 ${styles}`}>
+      <p className="text-xs uppercase tracking-[0.22em] opacity-80">{label}</p>
+      <p className="mt-2 text-3xl font-extrabold">{value}</p>
+      <p className="mt-1 text-[11px] uppercase tracking-[0.18em] opacity-70">alerts</p>
     </div>
   );
 }
